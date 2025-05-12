@@ -12,6 +12,7 @@ $Config = @{
     VersionFile = "versions.json"
     ChangeLogFile = "changelog.log"
     ReleaseDir  = "Releases"
+	MainProgramDir = ""
     Timeout     = 15
     RetryCount  = 3
 }
@@ -50,22 +51,26 @@ function Get-RemoteFileList {
         [string]$BaseUrl,
         [string]$ResourceName
     )
-
-    $folderPath = "$($Config.ReleaseDir)/$ResourceName"
+	# 主程序特殊处理
+    if ($ResourceName -eq "MainProgram") {
+        $folderPath = $Config.MainProgramDir
+    } else {
+        $folderPath = "$($Config.ReleaseDir)/$ResourceName"
+    }
+	
     $allFiles = @()
     $headers = @{}
 	
-	# 调试输出1：显示原始路径配置
-    Write-Host " [调试] ReleaseDir配置: $($Config.ReleaseDir)" -ForegroundColor DarkGray
-    Write-Host " [调试] 资源名称: $ResourceName" -ForegroundColor DarkGray
-    Write-Host " [调试] 计算后的文件夹路径: $folderPath" -ForegroundColor DarkGray
+	# 调试输出
+    Write-Host " [调试] 资源类型: $ResourceName" -ForegroundColor DarkGray
+    Write-Host " [调试] 最终文件夹路径: '$folderPath'" -ForegroundColor DarkGray
 
     # 先设置 API URL
     if ($BaseUrl -match "gitee.com") {
         $owner = "deercrazyleaf"
         $repo = "mymcmods"
         $apiUrl = "https://gitee.com/api/v5/repos/$owner/$repo/contents/$folderPath"
-        $headers["Authorization"] = "token 77fcc2d57d180f49245990d2d33aae4d"  # Gitee 令牌
+        $headers["Authorization"] = "token 0c6d34a7c54d83e5e1361517231a48bd"  # Gitee 令牌
     } else {
         $owner = "DearCrazyLeaf"
         $repo = "mcmods"
@@ -106,10 +111,13 @@ function Get-RemoteFileList {
 function Sync-ResourceFolder {
     param([string]$ResourceName, [string]$BaseUrl)
 
+    # 主程序特殊路径处理
     if ($ResourceName -eq "MainProgram") {
-        $targetPath = $PSScriptRoot
+        $targetPath = $PSScriptRoot  # 直接更新到脚本目录
+        $versionField = "MainProgram"
     } else {
         $targetPath = Join-Path $PSScriptRoot "data\$ResourceName"
+        $versionField = $ResourceName
     }
 	
     while ($retry -lt $Config.RetryCount) {
