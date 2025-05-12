@@ -63,19 +63,20 @@ function Get-RemoteFileList {
         $apiUrl = "https://api.github.com/repos/$owner/$repo/contents/$folderPath"
     }
 
-    # Write-Host " `n [调试] 正在请求API：$apiUrl" -ForegroundColor Gray
-
     try {
-        $response = Invoke-RestMethod -Uri $apiUrl -TimeoutSec $Config.Timeout
+        $headers = @{}
+        if ($BaseUrl -match "gitee.com") {
+            # 如果是 Gitee，添加身份验证信息
+            $headers.Add("Authorization", "token 77fcc2d57d180f49245990d2d33aae4d")
+        }
+        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec $Config.Timeout
         foreach ($item in $response) {
             if ($BaseUrl -match "gitee.com") {
                 $downloadUrl = $item.download_url
                 $fileName = $item.name
-               # Write-Host " [调试] Gitee原始下载地址: $downloadUrl" -ForegroundColor Gray
             } else {
                 $downloadUrl = $item.download_url
                 $fileName = $item.name
-               # Write-Host " [调试] GitHub下载地址: $downloadUrl" -ForegroundColor Gray
             }
 
             if ($item.type -eq 'file' -and $item.name -match '\.(jar|zip|pak)$') {
@@ -83,7 +84,6 @@ function Get-RemoteFileList {
                     RemotePath = $downloadUrl
                     LocalPath  = $fileName
                 }
-               # Write-Host " [调试] 找到文件: $($item.name) → 下载地址: $downloadUrl" -ForegroundColor DarkGray
             }
         }
         return $allFiles
