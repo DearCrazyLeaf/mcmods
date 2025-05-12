@@ -10,6 +10,7 @@ $Config = @{
     GiteeRepo   = "https://gitee.com/deercrazyleaf/mymcmods/raw/main"
     ResourceFolders = @("mods", "gunpaks")
     VersionFile = "versions.json"
+    ChangeLogFile = "changelog.log"
     ReleaseDir  = "Releases"
     Timeout     = 15
     RetryCount  = 3
@@ -52,50 +53,65 @@ function Get-RemoteFileList {
 
     $folderPath = "$($Config.ReleaseDir)/$ResourceName"
     $allFiles = @()
+    $headers = @{}
+	
+	# 调试输出1：显示原始路径配置
+    Write-Host " [调试] ReleaseDir配置: $($Config.ReleaseDir)" -ForegroundColor DarkGray
+    Write-Host " [调试] 资源名称: $ResourceName" -ForegroundColor DarkGray
+    Write-Host " [调试] 计算后的文件夹路径: $folderPath" -ForegroundColor DarkGray
 
+    # 先设置 API URL
     if ($BaseUrl -match "gitee.com") {
         $owner = "deercrazyleaf"
         $repo = "mymcmods"
         $apiUrl = "https://gitee.com/api/v5/repos/$owner/$repo/contents/$folderPath"
+        $headers["Authorization"] = "token 77fcc2d57d180f49245990d2d33aae4d"  # Gitee 令牌
     } else {
         $owner = "DearCrazyLeaf"
         $repo = "mcmods"
         $apiUrl = "https://api.github.com/repos/$owner/$repo/contents/$folderPath"
     }
+	
+	# 调试输出2：显示最终请求URL
+    Write-Host " [调试] 请求API URL: $apiUrl" -ForegroundColor Cyan
+    Write-Host " [调试] 请求头: $($headers | ConvertTo-Json)" -ForegroundColor DarkGray
 
     try {
-        $headers = @{}
-        if ($BaseUrl -match "gitee.com") {
-            # 如果是 Gitee，添加身份验证信息
-            $headers.Add("Authorization", "token 77fcc2d57d180f49245990d2d33aae4d")
-        }
-        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec $Config.Timeout
+        $response = Invoke-RestMethod -Uri $apiUrl -TimeoutSec $Config.Timeout
+		# 调试输出3：显示响应摘要
+        Write-Host " [调试] 收到响应，条目数: $($response.Count)" -ForegroundColor DarkGray
+		
         foreach ($item in $response) {
-            if ($BaseUrl -match "gitee.com") {
-                $downloadUrl = $item.download_url
-                $fileName = $item.name
-            } else {
-                $downloadUrl = $item.download_url
-                $fileName = $item.name
-            }
-
             if ($item.type -eq 'file' -and $item.name -match '\.(jar|zip|pak)$') {
                 $allFiles += @{
-                    RemotePath = $downloadUrl
-                    LocalPath  = $fileName
+                    RemotePath = $item.download_url
+                    LocalPath  = $item.name
                 }
+				# 调试输出4：显示发现的有效文件
+                Write-Host " [调试] 发现有效文件: $($item.name)" -ForegroundColor DarkGray
             }
         }
         return $allFiles
     } catch {
-        Write-Host " [错误] 获取文件列表失败: $($_.Exception.Message)" -ForegroundColor Red
+        # 调试输出5：详细错误信息
+        Write-Host " [详细错误] 状态码: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
+        Write-Host " [详细错误] 错误消息: $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.ErrorDetails) {
+            Write-Host " [详细错误] 响应内容: $($_.ErrorDetails.Message)" -ForegroundColor DarkRed
+        }
         return @()
     }
 }
 
 function Sync-ResourceFolder {
     param([string]$ResourceName, [string]$BaseUrl)
-    $retry = 0
+
+    if ($ResourceName -eq "MainProgram") {
+        $targetPath = $PSScriptRoot
+    } else {
+        $targetPath = Join-Path $PSScriptRoot "data\$ResourceName"
+    }
+	
     while ($retry -lt $Config.RetryCount) {
         try {
             $remoteVersionUrl = "$BaseUrl/$($Config.VersionFile)"
@@ -200,54 +216,105 @@ function Sync-ResourceFolder {
     Write-Host " [错误] 同步失败，已达最大重试次数" -ForegroundColor Red
     return $false
 }
-# ====================== 主程序自我更新检查 ======================
-& "$PSScriptRoot\update.bat"
-if ($LASTEXITCODE -eq 0) {
-    # 更新成功并重新启动，直接退出当前脚本
-    exit 0
-} elseif ($LASTEXITCODE -eq 2) {
-    # 用户选择跳过更新，继续执行当前版本
-    Write-Host "`n=== 跳过主程序更新 ===" -ForegroundColor Yellow
-} else {
-    # 更新检查失败，继续执行当前版本
-    Write-Host "`n=== 主程序更新检查失败 ===" -ForegroundColor Red
+
+function Check-Update {
+    param([string]$BaseUrl)
+    try {
+        $remoteVersionUrl = "$BaseUrl/$($Config.VersionFile)"
+        $remoteData = Invoke-RestMethod -Uri $remoteVersionUrl -TimeoutSec $Config.Timeout
+        $remoteVersion = $remoteData.MainProgram
+
+        $localVersionPath = Join-Path $PSScriptRoot $Config.VersionFile
+        $localVersion = if (Test-Path -LiteralPath $localVersionPath) {
+            (Get-Content -LiteralPath $localVersionPath | ConvertFrom-Json).MainProgram
+        } else { "0.0.0" }
+
+        if ([version]$remoteVersion -gt [version]$localVersion) {
+            Write-Host " [更新] 发现主程序新版本 ($localVersion → $remoteVersion)" -ForegroundColor Cyan
+
+            $changelogUrl = "$BaseUrl/$($Config.ChangeLogFile)"
+            try {
+                $changelog = Invoke-RestMethod -Uri $changelogUrl -TimeoutSec $Config.Timeout
+                Write-Host "`n=== 更新日志 ===" -ForegroundColor Yellow
+                Write-Host $changelog
+            } catch {
+                Write-Host " [警告] 无法获取更新日志: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+
+            $choice = Read-Host "是否更新到新版本？(Y/N)"
+            if ($choice -eq 'Y' -or $choice -eq 'y') {
+                $updateResult = Sync-ResourceFolder -ResourceName "MainProgram" -BaseUrl $BaseUrl
+                if ($updateResult) {
+                    Write-Host " [成功] 主程序已更新到 v$remoteVersion" -ForegroundColor Green
+                } else {
+                    Write-Host " [错误] 主程序更新失败" -ForegroundColor Red
+                    $retryUpdate = Read-Host "是否继续启动主程序？(Y/N)"
+                    if ($retryUpdate -eq 'Y' -or $retryUpdate -eq 'y') {
+                        return $true
+                    } else {
+                        return $false
+                    }
+                }
+            } else {
+                Write-Host " [信息] 跳过主程序更新，继续启动主程序" -ForegroundColor Gray
+                return $true
+            }
+        } else {
+            Write-Host " [信息] 主程序已是最新版本 v$localVersion" -ForegroundColor Gray
+            return $true
+        }
+    } catch {
+        Write-Host " [错误] 检查更新失败: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
 }
+
 # ====================== 主流程 ======================
+# 初始化目标目录（必须放在最前）
+if (-not $targetRoot) {
+    try {
+        # 获取脚本所在目录的父目录
+        $scriptParent = (Get-Item $PSScriptRoot).Parent
+        if (-not $scriptParent) {
+            throw "脚本位于根目录，无法自动确定目标路径"
+        }
+        $targetRoot = $scriptParent.FullName
+        Write-Host " [信息] 自动检测到目标目录: $targetRoot" -ForegroundColor DarkGray
+    } catch {
+        Write-Host " [错误] 无法自动确定目标目录: $_" -ForegroundColor Red
+        exit 1
+    }
+}
+
 if (-not $SkipUpdate) {
-    Write-Host "`n=== 检查更新 ===" -ForegroundColor Blue
+    Write-Host "`n=== 检查安装器更新 ===" -ForegroundColor Blue
     if (-not ($BaseUrl = Get-BestSource)) {
         Write-Host " [警告] 无法连接到任何更新源，跳过更新检查" -ForegroundColor Yellow
     } else {
-        # 修复主逻辑：添加 Releases 路径
-        if ($BaseUrl -match "github.com") {
-            $BaseUrl = "$BaseUrl/$($Config.ReleaseDir)"
-        }
         Write-Host " [信息] 使用更新源：$([uri]$BaseUrl)"
-        $updateFlag = $false
-        foreach ($folder in $Config.ResourceFolders) {
-            if (Sync-ResourceFolder -ResourceName $folder -BaseUrl $BaseUrl) {
-                $updateFlag = $true
+        
+        # 阶段1：主程序更新检查与执行
+        $mainUpdateResult = Check-Update -BaseUrl $BaseUrl
+        
+        # 阶段2：资源文件更新检查（无论主程序是否更新成功）
+        if ($mainUpdateResult -ne $false) {
+            foreach ($folder in $Config.ResourceFolders) {
+                Write-Host "`n=== 检查${folder}更新 ===" -ForegroundColor Magenta
+                Sync-ResourceFolder -ResourceName $folder -BaseUrl $BaseUrl | Out-Null
             }
-        }
-        if ($updateFlag) {
-            Write-Host "`n已应用最新更新，即将开始安装..." -ForegroundColor Cyan
-            Start-Sleep -Seconds 2
         }
     }
 }
+
+# 安装信息显示（在所有更新操作完成后）
+Write-Host "`n=== 安装信息 ===" -ForegroundColor Cyan
+Write-Host "程序位置：$PSScriptRoot"
+Write-Host "目标目录：$targetRoot`n"
 
 $copyMap = @{
     "data\mods"    = "mods"
     "data\gunpaks" = "tacz"
 }
-
-if (-not $targetRoot) {
-    $targetRoot = (Get-Item $PSScriptRoot).Parent.FullName
-}
-
-Write-Host "`n=== 安装信息 ===" -ForegroundColor Cyan
-Write-Host "程序位置：$PSScriptRoot"
-Write-Host "目标目录：$targetRoot`n"
 
 foreach ($entry in $copyMap.GetEnumerator()) {
     $sourcePath = Join-Path $PSScriptRoot $entry.Key
