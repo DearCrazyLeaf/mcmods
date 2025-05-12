@@ -200,7 +200,18 @@ function Sync-ResourceFolder {
     Write-Host " [错误] 同步失败，已达最大重试次数" -ForegroundColor Red
     return $false
 }
-
+# ====================== 主程序自我更新检查 ======================
+& "$PSScriptRoot\update.bat"
+if ($LASTEXITCODE -eq 0) {
+    # 更新成功并重新启动，直接退出当前脚本
+    exit 0
+} elseif ($LASTEXITCODE -eq 2) {
+    # 用户选择跳过更新，继续执行当前版本
+    Write-Host "`n=== 跳过主程序更新 ===" -ForegroundColor Yellow
+} else {
+    # 更新检查失败，继续执行当前版本
+    Write-Host "`n=== 主程序更新检查失败 ===" -ForegroundColor Red
+}
 # ====================== 主流程 ======================
 if (-not $SkipUpdate) {
     Write-Host "`n=== 检查更新 ===" -ForegroundColor Blue
