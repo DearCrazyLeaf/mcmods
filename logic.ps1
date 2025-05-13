@@ -7,7 +7,7 @@
 
 $Config = @{
     GitHubRepo  = "https://raw.githubusercontent.com/DearCrazyLeaf/mcmods/main"
-    GiteeRepo   = "https://gitee.com/deercrazyleaf/mymcmods/raw/main"
+    GiteeRepo   = $null
     ResourceFolders = @("mods", "gunpaks")
     VersionFile = "versions.json"
     ChangeLogFile = "changelog.log"
@@ -51,7 +51,7 @@ function Get-RemoteFileList {
         [string]$BaseUrl,
         [string]$ResourceName
     )
-	# 主程序特殊处理
+
     if ($ResourceName -eq "MainProgram") {
         $folderPath = $Config.MainProgramDir
     } else {
@@ -61,30 +61,31 @@ function Get-RemoteFileList {
     $allFiles = @()
     $headers = @{}
 	
-	# 调试输出
-    Write-Host " [调试] 资源类型: $ResourceName" -ForegroundColor DarkGray
-    Write-Host " [调试] 最终文件夹路径: '$folderPath'" -ForegroundColor DarkGray
+    # Write-Host " [调试] 资源类型: $ResourceName" -ForegroundColor DarkGray
+    # Write-Host " [调试] 最终文件夹路径: '$folderPath'" -ForegroundColor DarkGray
 
     # 先设置 API URL
     if ($BaseUrl -match "gitee.com") {
         $owner = "deercrazyleaf"
         $repo = "mymcmods"
         $apiUrl = "https://gitee.com/api/v5/repos/$owner/$repo/contents/$folderPath"
-        $headers["Authorization"] = "token 0c6d34a7c54d83e5e1361517231a48bd"  # Gitee 令牌
+        $headers["Authorization"] = "token TOKEN_HERE"  # Gitee 令牌
     } else {
-        $owner = "DearCrazyLeaf"
-        $repo = "mcmods"
-        $apiUrl = "https://api.github.com/repos/$owner/$repo/contents/$folderPath"
+        # GitHub API处理
+		$owner = "DearCrazyLeaf"
+		$repo = "mcmods"
+		$folderPath = "$($Config.ReleaseDir)/$ResourceName"
+		$apiUrl = "https://api.github.com/repos/$owner/$repo/contents/$folderPath"
     }
 	
 	# 调试输出2：显示最终请求URL
-    Write-Host " [调试] 请求API URL: $apiUrl" -ForegroundColor Cyan
-    Write-Host " [调试] 请求头: $($headers | ConvertTo-Json)" -ForegroundColor DarkGray
+    # Write-Host " [调试] 请求API URL: $apiUrl" -ForegroundColor Cyan
+    # Write-Host " [调试] 请求头: $($headers | ConvertTo-Json)" -ForegroundColor DarkGray
 
     try {
-        $response = Invoke-RestMethod -Uri $apiUrl -TimeoutSec $Config.Timeout
+        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec $Config.Timeout
 		# 调试输出3：显示响应摘要
-        Write-Host " [调试] 收到响应，条目数: $($response.Count)" -ForegroundColor DarkGray
+        # Write-Host " [调试] 收到响应，条目数: $($response.Count)" -ForegroundColor DarkGray
 		
         foreach ($item in $response) {
             if ($item.type -eq 'file' -and $item.name -match '\.(jar|zip|pak)$') {
@@ -93,25 +94,25 @@ function Get-RemoteFileList {
                     LocalPath  = $item.name
                 }
 				# 调试输出4：显示发现的有效文件
-                Write-Host " [调试] 发现有效文件: $($item.name)" -ForegroundColor DarkGray
+                # Write-Host " [调试] 发现有效文件: $($item.name)" -ForegroundColor DarkGray
             }
         }
         return $allFiles
     } catch {
-        # 调试输出5：详细错误信息
-        Write-Host " [详细错误] 状态码: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
+       # 调试输出5：详细错误信息
+		Write-Host " [详细错误] 状态码: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
         Write-Host " [详细错误] 错误消息: $($_.Exception.Message)" -ForegroundColor Red
         if ($_.ErrorDetails) {
             Write-Host " [详细错误] 响应内容: $($_.ErrorDetails.Message)" -ForegroundColor DarkRed
-        }
         return @()
-    }
+        }
+	}
 }
 
 function Sync-ResourceFolder {
     param([string]$ResourceName, [string]$BaseUrl)
 
-    # 主程序特殊路径处理
+	Write-Host "`n [信息] 正在通过GitHub加速通道下载..." -ForegroundColor Cyan
     if ($ResourceName -eq "MainProgram") {
         $targetPath = $PSScriptRoot  # 直接更新到脚本目录
         $versionField = "MainProgram"
@@ -243,7 +244,7 @@ function Check-Update {
             $changelogUrl = "$BaseUrl/$($Config.ChangeLogFile)"
             try {
                 $changelog = Invoke-RestMethod -Uri $changelogUrl -TimeoutSec $Config.Timeout
-                Write-Host "`n=== 更新日志 ===" -ForegroundColor Yellow
+                Write-Host "`n▄▄▄▄▄▄  更新日志 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄`n" -ForegroundColor Yellow
                 Write-Host $changelog
             } catch {
                 Write-Host " [警告] 无法获取更新日志: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -278,16 +279,15 @@ function Check-Update {
 }
 
 # ====================== 主流程 ======================
-# 初始化目标目录（必须放在最前）
+
 if (-not $targetRoot) {
     try {
-        # 获取脚本所在目录的父目录
         $scriptParent = (Get-Item $PSScriptRoot).Parent
         if (-not $scriptParent) {
             throw "脚本位于根目录，无法自动确定目标路径"
         }
         $targetRoot = $scriptParent.FullName
-        Write-Host " [信息] 自动检测到目标目录: $targetRoot" -ForegroundColor DarkGray
+        # Write-Host " [信息] 自动检测到目标目录: $targetRoot" -ForegroundColor DarkGray
     } catch {
         Write-Host " [错误] 无法自动确定目标目录: $_" -ForegroundColor Red
         exit 1
@@ -295,19 +295,30 @@ if (-not $targetRoot) {
 }
 
 if (-not $SkipUpdate) {
-    Write-Host "`n=== 检查安装器更新 ===" -ForegroundColor Blue
+    Write-Host "`n"
+	Write-Host "   ███ \   ███\ ███ \  ███\    ███ \███\      ███ \      ████████ \ ███ \  ███ \ " -ForegroundColor Cyan
+	Write-Host "   ███  |  ███ \███  | \███\  ███  |████\    ████  |    ███  __ ██ \███  \ ███  |" -ForegroundColor Cyan
+	Write-Host "   ███  |  ███  ███  |  \███\███  / █████\  █████  |    ███ /  \__ |█████ \███  |" -ForegroundColor Cyan
+	Write-Host "   ███████████  ███  |   \█████  /  ███\██\██ ███  |    ███ |       ███ ██\███  |" -ForegroundColor Cyan
+	Write-Host "   ███   __███  ███  |    \███  /   ███ \███  ███  |    ███ |       ███  \████  |" -ForegroundColor Cyan
+	Write-Host "   ███  |  ███  ███  |     ███  |   ███  \█  /███  |    ███ |   ██ \███  |\███  |" -ForegroundColor Cyan
+	Write-Host "   ███  |  ███  █████████\ ███  |   ███  |\_/ ███  |██ \ ████████  |███  | \██  |" -ForegroundColor Cyan
+	Write-Host "   \____|  \____\_________|\____|   \____|    \____|\__| \_______ / \____|  \___|" -ForegroundColor Cyan
+    $versionInfo = (Get-Content (Join-Path $PSScriptRoot $Config.VersionFile) | ConvertFrom-Json).MainProgram
+    Write-Host " 版本号: v$versionInfo" -ForegroundColor Magenta
+    Write-Host " 项目主页: https://github.com/DearCrazyLeaf/mcmods" -ForegroundColor Blue
+    Write-Host " 技术支持: QQ 2336758119 | 电子邮箱 crazyleaf0912@outlook.com" -ForegroundColor Green
+    Write-Host "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" -ForegroundColor DarkGray
+
+    Write-Host "`n▄▄▄▄▄▄  检查安装器更新 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" -ForegroundColor Blue
     if (-not ($BaseUrl = Get-BestSource)) {
         Write-Host " [警告] 无法连接到任何更新源，跳过更新检查" -ForegroundColor Yellow
     } else {
-        Write-Host " [信息] 使用更新源：$([uri]$BaseUrl)"
-        
-        # 阶段1：主程序更新检查与执行
+        Write-Host "`n [信息] 使用更新源：$([uri]$BaseUrl)"
         $mainUpdateResult = Check-Update -BaseUrl $BaseUrl
-        
-        # 阶段2：资源文件更新检查（无论主程序是否更新成功）
         if ($mainUpdateResult -ne $false) {
             foreach ($folder in $Config.ResourceFolders) {
-                Write-Host "`n=== 检查${folder}更新 ===" -ForegroundColor Magenta
+                Write-Host "`n▄▄▄▄▄  检查${folder}更新 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" -ForegroundColor Magenta
                 Sync-ResourceFolder -ResourceName $folder -BaseUrl $BaseUrl | Out-Null
             }
         }
@@ -315,8 +326,8 @@ if (-not $SkipUpdate) {
 }
 
 # 安装信息显示（在所有更新操作完成后）
-Write-Host "`n=== 安装信息 ===" -ForegroundColor Cyan
-Write-Host "程序位置：$PSScriptRoot"
+Write-Host "`n▄▄▄▄▄▄  安装信息 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" -ForegroundColor Cyan
+Write-Host "`n程序位置：$PSScriptRoot"
 Write-Host "目标目录：$targetRoot`n"
 
 $copyMap = @{
@@ -352,7 +363,7 @@ foreach ($entry in $copyMap.GetEnumerator()) {
         }
     }
 
-    Write-Host "`n正在处理：$($entry.Key) → $($entry.Value)"
+    Write-Host "正在处理：$($entry.Key) → $($entry.Value)"
     $fileCount = 0
     
     foreach ($file in (Get-ChildItem -LiteralPath $sourcePath -Recurse -File)) {
@@ -385,21 +396,21 @@ foreach ($entry in $copyMap.GetEnumerator()) {
     }
 }
 
-Write-Host "`n=== 安装结果 ===" -ForegroundColor Cyan
+Write-Host "`n▄▄▄▄▄▄  安装结果 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" -ForegroundColor Cyan
 if (-not $anySourceExists) {
-    Write-Host "安装失败：所有源目录均不存在！是否是缺失资源导致的？" -ForegroundColor DarkRed
+    Write-Host "`n安装失败：所有源目录均不存在！是否是缺失资源导致的？" -ForegroundColor DarkRed
 }
 elseif ($global:allEmpty) {
-    Write-Host "安装失败：所有存在的源目录均为空！是否是缺失资源导致的？" -ForegroundColor DarkRed
+    Write-Host "`n安装失败：所有存在的源目录均为空！是否是缺失资源导致的？" -ForegroundColor DarkRed
 }
 else {
     $statusMsg = if ($global:fileConflict) {
-        "部分文件已存在（跳过$($global:itemsSkipped)个），成功安装：$($global:itemsCopied)个文件！"
+        "`n部分文件已存在（跳过$($global:itemsSkipped)个），成功安装：$($global:itemsCopied)个文件！"
     } else {
-        "成功安装：$($global:itemsCopied)个文件！"
+        "`n成功安装：$($global:itemsCopied)个文件！"
     }
     Write-Host $statusMsg -ForegroundColor Green
 }
-
-Write-Host "`n操作完成，按回车键退出..."
+Write-Host "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" -ForegroundColor DarkGray
+Write-Host "`n请按回车键退出..."
 Read-Host
