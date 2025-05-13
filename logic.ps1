@@ -100,7 +100,7 @@ function Get-RemoteFileList {
         return $allFiles
     } catch {
        # 调试输出5：详细错误信息
-		Write-Host " [详细错误] 状态码: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
+		# Write-Host " [详细错误] 状态码: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
         Write-Host " [详细错误] 错误消息: $($_.Exception.Message)" -ForegroundColor Red
         if ($_.ErrorDetails) {
             Write-Host " [详细错误] 响应内容: $($_.ErrorDetails.Message)" -ForegroundColor DarkRed
@@ -114,7 +114,7 @@ function Sync-ResourceFolder {
 
 	Write-Host "`n [信息] 正在通过GitHub加速通道下载..." -ForegroundColor Cyan
     if ($ResourceName -eq "MainProgram") {
-        $targetPath = $PSScriptRoot  # 直接更新到脚本目录
+        $targetPath = Join-Path $PSScriptRoot $Config.MainProgramDir
         $versionField = "MainProgram"
     } else {
         $targetPath = Join-Path $PSScriptRoot "data\$ResourceName"
@@ -304,7 +304,8 @@ if (-not $SkipUpdate) {
 	Write-Host "   ███  |  ███  ███  |     ███  |   ███  \█  /███  |    ███ |   ██ \███  |\███  |" -ForegroundColor Cyan
 	Write-Host "   ███  |  ███  █████████\ ███  |   ███  |\_/ ███  |██ \ ████████  |███  | \██  |" -ForegroundColor Cyan
 	Write-Host "   \____|  \____\_________|\____|   \____|    \____|\__| \_______ / \____|  \___|" -ForegroundColor Cyan
-    $versionInfo = (Get-Content (Join-Path $PSScriptRoot $Config.VersionFile) | ConvertFrom-Json).MainProgram
+	
+    $versionInfo = (Get-Content (Join-Path $PSScriptRoot "data\$($Config.VersionFile)") | ConvertFrom-Json).MainProgram
     Write-Host " 版本号: v$versionInfo" -ForegroundColor Magenta
     Write-Host " 项目主页: https://github.com/DearCrazyLeaf/mcmods" -ForegroundColor Blue
     Write-Host " 技术支持: QQ 2336758119 | 电子邮箱 crazyleaf0912@outlook.com" -ForegroundColor Green
