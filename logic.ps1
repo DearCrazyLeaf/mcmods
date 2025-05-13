@@ -1,18 +1,18 @@
 ﻿param(
     [string]$targetRoot = $null,
     [switch]$SkipUpdate = $false,
-    [ValidateSet('Auto','Gitee','GitHub')]
+    [ValidateSet('Auto', 'Gitee', 'GitHub')]
     [string]$Source = 'Auto'
 )
 
 $Config = @{
     GitHubRepo  = "https://raw.githubusercontent.com/DearCrazyLeaf/mcmods/main"
-    GiteeRepo   = $null
+    GiteeRepo   = ""
     ResourceFolders = @("mods", "gunpaks")
     VersionFile = "versions.json"
     ChangeLogFile = "changelog.log"
     ReleaseDir  = "Releases"
-	MainProgramDir = ""
+    MainProgramDir = "MainProgram"
     Timeout     = 15
     RetryCount  = 3
 }
@@ -57,62 +57,50 @@ function Get-RemoteFileList {
     } else {
         $folderPath = "$($Config.ReleaseDir)/$ResourceName"
     }
-	
+
     $allFiles = @()
     $headers = @{}
-	
-    # Write-Host " [调试] 资源类型: $ResourceName" -ForegroundColor DarkGray
-    # Write-Host " [调试] 最终文件夹路径: '$folderPath'" -ForegroundColor DarkGray
 
-    # 先设置 API URL
     if ($BaseUrl -match "gitee.com") {
         $owner = "deercrazyleaf"
         $repo = "mymcmods"
         $apiUrl = "https://gitee.com/api/v5/repos/$owner/$repo/contents/$folderPath"
-        $headers["Authorization"] = "token TOKEN_HERE"  # Gitee 令牌
+        $headers["Authorization"] = "token YOUR_GITEE_TOKEN"
     } else {
-        # GitHub API处理
-		$owner = "DearCrazyLeaf"
-		$repo = "mcmods"
-		$folderPath = "$($Config.ReleaseDir)/$ResourceName"
-		$apiUrl = "https://api.github.com/repos/$owner/$repo/contents/$folderPath"
+        $owner = "DearCrazyLeaf"
+        $repo = "mcmods"
+        $apiUrl = "https://api.github.com/repos/$owner/$repo/contents/$folderPath"
     }
-	
-	# 调试输出2：显示最终请求URL
-    # Write-Host " [调试] 请求API URL: $apiUrl" -ForegroundColor Cyan
+
+    # Write-Host " [调试] 请求的 URL: $apiUrl" -ForegroundColor Cyan
     # Write-Host " [调试] 请求头: $($headers | ConvertTo-Json)" -ForegroundColor DarkGray
 
     try {
         $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec $Config.Timeout
-		# 调试输出3：显示响应摘要
-        # Write-Host " [调试] 收到响应，条目数: $($response.Count)" -ForegroundColor DarkGray
-		
         foreach ($item in $response) {
             if ($item.type -eq 'file' -and $item.name -match '\.(jar|zip|pak)$') {
                 $allFiles += @{
                     RemotePath = $item.download_url
                     LocalPath  = $item.name
                 }
-				# 调试输出4：显示发现的有效文件
                 # Write-Host " [调试] 发现有效文件: $($item.name)" -ForegroundColor DarkGray
             }
         }
         return $allFiles
     } catch {
-       # 调试输出5：详细错误信息
-		# Write-Host " [详细错误] 状态码: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
+        Write-Host " [详细错误] 状态码: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
         Write-Host " [详细错误] 错误消息: $($_.Exception.Message)" -ForegroundColor Red
         if ($_.ErrorDetails) {
             Write-Host " [详细错误] 响应内容: $($_.ErrorDetails.Message)" -ForegroundColor DarkRed
-        return @()
         }
-	}
+        return @()
+    }
 }
 
 function Sync-ResourceFolder {
     param([string]$ResourceName, [string]$BaseUrl)
 
-	Write-Host "`n [信息] 正在通过GitHub加速通道下载..." -ForegroundColor Cyan
+    Write-Host "`n [信息] 正在通过GitHub加速通道下载..." -ForegroundColor Cyan
     if ($ResourceName -eq "MainProgram") {
         $targetPath = Join-Path $PSScriptRoot $Config.MainProgramDir
         $versionField = "MainProgram"
@@ -120,7 +108,8 @@ function Sync-ResourceFolder {
         $targetPath = Join-Path $PSScriptRoot "data\$ResourceName"
         $versionField = $ResourceName
     }
-	
+
+    $retry = 0
     while ($retry -lt $Config.RetryCount) {
         try {
             $remoteVersionUrl = "$BaseUrl/$($Config.VersionFile)"
@@ -152,14 +141,14 @@ function Sync-ResourceFolder {
                     $currentCount++
                     $localFile = Join-Path $targetPath $file.LocalPath
                     $localDir = [System.IO.Path]::GetDirectoryName($localFile)
-                    
+
                     if (-not (Test-Path $localDir)) {
                         New-Item -Path $localDir -ItemType Directory -Force | Out-Null
                     }
 
                     try {
-                        Write-Progress -Activity "下载文件" -Status "$currentCount/$totalFiles $($file.LocalPath)" -PercentComplete ($currentCount/$totalFiles*100)
-                    
+                        Write-Progress -Activity "下载文件" -Status "$currentCount/$totalFiles $($file.LocalPath)" -PercentComplete ($currentCount / $totalFiles * 100)
+
                         $webClient = New-Object System.Net.WebClient
                         $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
                         $webClient.Headers.Add("Referer", $BaseUrl)
@@ -233,7 +222,7 @@ function Check-Update {
         $remoteData = Invoke-RestMethod -Uri $remoteVersionUrl -TimeoutSec $Config.Timeout
         $remoteVersion = $remoteData.MainProgram
 
-        $localVersionPath = Join-Path $PSScriptRoot $Config.VersionFile
+        $localVersionPath = Join-Path $PSScriptRoot "data\$($Config.VersionFile)"
         $localVersion = if (Test-Path -LiteralPath $localVersionPath) {
             (Get-Content -LiteralPath $localVersionPath | ConvertFrom-Json).MainProgram
         } else { "0.0.0" }
@@ -287,7 +276,6 @@ if (-not $targetRoot) {
             throw "脚本位于根目录，无法自动确定目标路径"
         }
         $targetRoot = $scriptParent.FullName
-        # Write-Host " [信息] 自动检测到目标目录: $targetRoot" -ForegroundColor DarkGray
     } catch {
         Write-Host " [错误] 无法自动确定目标目录: $_" -ForegroundColor Red
         exit 1
@@ -296,16 +284,21 @@ if (-not $targetRoot) {
 
 if (-not $SkipUpdate) {
     Write-Host "`n"
-	Write-Host "   ███ \   ███\ ███ \  ███\    ███ \███\      ███ \      ████████ \ ███ \  ███ \ " -ForegroundColor Cyan
-	Write-Host "   ███  |  ███ \███  | \███\  ███  |████\    ████  |    ███  __ ██ \███  \ ███  |" -ForegroundColor Cyan
-	Write-Host "   ███  |  ███  ███  |  \███\███  / █████\  █████  |    ███ /  \__ |█████ \███  |" -ForegroundColor Cyan
-	Write-Host "   ███████████  ███  |   \█████  /  ███\██\██ ███  |    ███ |       ███ ██\███  |" -ForegroundColor Cyan
-	Write-Host "   ███   __███  ███  |    \███  /   ███ \███  ███  |    ███ |       ███  \████  |" -ForegroundColor Cyan
-	Write-Host "   ███  |  ███  ███  |     ███  |   ███  \█  /███  |    ███ |   ██ \███  |\███  |" -ForegroundColor Cyan
-	Write-Host "   ███  |  ███  █████████\ ███  |   ███  |\_/ ███  |██ \ ████████  |███  | \██  |" -ForegroundColor Cyan
-	Write-Host "   \____|  \____\_________|\____|   \____|    \____|\__| \_______ / \____|  \___|" -ForegroundColor Cyan
-	
-    $versionInfo = (Get-Content (Join-Path $PSScriptRoot "data\$($Config.VersionFile)") | ConvertFrom-Json).MainProgram
+    Write-Host "   ███ \   ███\ ███ \  ███\    ███ \███\      ███ \      ████████ \ ███ \  ███ \ " -ForegroundColor Cyan
+    Write-Host "   ███  |  ███ \███  | \███\  ███  |████\    ████  |    ███  __ ██ \███  \ ███  |" -ForegroundColor Cyan
+    Write-Host "   ███  |  ███  ███  |  \███\███  / █████\  █████  |    ███ /  \__ |█████ \███  |" -ForegroundColor Cyan
+    Write-Host "   ███████████  ███  |   \█████  /  ███\██\██ ███  |    ███ |       ███ ██\███  |" -ForegroundColor Cyan
+    Write-Host "   ███   __███  ███  |    \███  /   ███ \███  ███  |    ███ |       ███  \████  |" -ForegroundColor Cyan
+    Write-Host "   ███  |  ███  ███  |     ███  |   ███  \█  /███  |    ███ |   ██ \███  |\███  |" -ForegroundColor Cyan
+    Write-Host "   ███  |  ███  █████████\ ███  |   ███  |\_/ ███  |██ \ ████████  |███  | \██  |" -ForegroundColor Cyan
+    Write-Host "   \____|  \____\_________|\____|   \____|    \____|\__| \_______ / \____|  \___|" -ForegroundColor Cyan
+
+    $versionFilePath = Join-Path $PSScriptRoot "data\$($Config.VersionFile)"
+    if (Test-Path -LiteralPath $versionFilePath) {
+        $versionInfo = (Get-Content $versionFilePath | ConvertFrom-Json).MainProgram
+    } else {
+        $versionInfo = "0.0.0"
+    }
     Write-Host " 版本号: v$versionInfo" -ForegroundColor Magenta
     Write-Host " 项目主页: https://github.com/DearCrazyLeaf/mcmods" -ForegroundColor Blue
     Write-Host " 技术支持: QQ 2336758119 | 电子邮箱 crazyleaf0912@outlook.com" -ForegroundColor Green
@@ -326,7 +319,6 @@ if (-not $SkipUpdate) {
     }
 }
 
-# 安装信息显示（在所有更新操作完成后）
 Write-Host "`n▄▄▄▄▄▄  安装信息 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" -ForegroundColor Cyan
 Write-Host "`n程序位置：$PSScriptRoot"
 Write-Host "目标目录：$targetRoot`n"
@@ -366,7 +358,7 @@ foreach ($entry in $copyMap.GetEnumerator()) {
 
     Write-Host "正在处理：$($entry.Key) → $($entry.Value)"
     $fileCount = 0
-    
+
     foreach ($file in (Get-ChildItem -LiteralPath $sourcePath -Recurse -File)) {
         $relativePath = $file.FullName.Substring($sourcePath.TrimEnd('\').Length + 1)
         $destFile = Join-Path $targetPath $relativePath
