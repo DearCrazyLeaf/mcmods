@@ -331,9 +331,9 @@ function Test-Update {
             } catch {
                 Write-Host " [警告] 无法获取更新日志: $($_.Exception.Message)" -ForegroundColor Yellow
             }
-
-            Write-Host "请前往地址：https://github.com/DearCrazyLeaf/mcmods下载最新版主程序" -ForegroundColor Yellow
-            return $false
+			Write-Host "资源检测将会正常进行，为了您的程序能够正常进行，避免版本过旧无法运行，请：" -ForegroundColor DarkYellow
+			Write-Host "前往地址：https://github.com/DearCrazyLeaf/mcmods下载最新版主程序" -ForegroundColor DarkYellow
+            return $true
         } else {
             Write-Host "`n [信息] 主程序已是最新版本 v$localVersion" -ForegroundColor Green
             return $true
