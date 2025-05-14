@@ -1,13 +1,10 @@
 ﻿param(
     [string]$targetRoot = $null,
     [switch]$SkipUpdate = $false,
-    [ValidateSet('Auto', 'Gitee', 'GitHub')]
-    [string]$Source = 'Auto'
+    [string]$UpdateBaseUrl = "ftp://1952274855%40QQ.COM.15961:xhj2001912@mcp19.rhymc.com/Updatebase/"
 )
 
 $Config = @{
-    GitHubRepo  = "https://raw.githubusercontent.com/DearCrazyLeaf/mcmods/main"
-    GiteeRepo   = ""
     ResourceFolders = @("mods", "gunpaks")
     VersionFile = "versions.json"
     ChangeLogFile = "changelog.log"
@@ -27,23 +24,15 @@ function Test-RepoAccess {
     param([string]$TestUrl)
     try {
         $versionUrl = "$TestUrl/$($Config.VersionFile)"
-        $response = Invoke-WebRequest -Uri $versionUrl -Method Head -TimeoutSec 5
-        return $response.StatusCode -eq 200
+        $request = [System.Net.FtpWebRequest]::Create($versionUrl)
+        $request.Method = [System.Net.WebRequestMethods+Ftp]::GetDateTimestamp
+        $request.Timeout = 5000
+        $response = $request.GetResponse()
+        $response.Close()
+        return $true
     } catch {
         return $false
     }
-}
-
-function Get-BestSource {
-    $githubTest = Test-RepoAccess -TestUrl $Config.GitHubRepo
-    $giteeTest = Test-RepoAccess -TestUrl $Config.GiteeRepo
-
-    if ($Source -eq 'Auto') {
-        if ($giteeTest) { return $Config.GiteeRepo }
-        if ($githubTest) { return $Config.GitHubRepo }
-        return $null
-    }
-    return @{'Gitee' = $Config.GiteeRepo; 'GitHub' = $Config.GitHubRepo}[$Source]
 }
 
 function Get-RemoteFileList {
@@ -52,6 +41,8 @@ function Get-RemoteFileList {
         [string]$ResourceName
     )
 
+    $BaseUrl = $BaseUrl.TrimEnd('/')
+
     if ($ResourceName -eq "MainProgram") {
         $folderPath = $Config.MainProgramDir
     } else {
@@ -59,48 +50,132 @@ function Get-RemoteFileList {
     }
 
     $allFiles = @()
-    $headers = @{}
-
-    if ($BaseUrl -match "gitee.com") {
-        $owner = "deercrazyleaf"
-        $repo = "mymcmods"
-        $apiUrl = "https://gitee.com/api/v5/repos/$owner/$repo/contents/$folderPath"
-        $headers["Authorization"] = "token YOUR_GITEE_TOKEN"
-    } else {
-        $owner = "DearCrazyLeaf"
-        $repo = "mcmods"
-        $apiUrl = "https://api.github.com/repos/$owner/$repo/contents/$folderPath"
-    }
-
-    # Write-Host " [调试] 请求的 URL: $apiUrl" -ForegroundColor Cyan
-    # Write-Host " [调试] 请求头: $($headers | ConvertTo-Json)" -ForegroundColor DarkGray
-
     try {
-        $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec $Config.Timeout
-        foreach ($item in $response) {
-            if ($item.type -eq 'file' -and $item.name -match '\.(jar|zip|pak)$') {
-                $allFiles += @{
-                    RemotePath = $item.download_url
-                    LocalPath  = $item.name
+        $folderPath = $folderPath.Replace('\', '/').TrimStart('/').TrimEnd('/')
+        $listUrl = "$BaseUrl/$folderPath"
+        $request = [System.Net.FtpWebRequest]::Create($listUrl)
+        $request.Method = [System.Net.WebRequestMethods+Ftp]::ListDirectoryDetails
+        $request.Timeout = $Config.Timeout * 1000
+        $request.UsePassive = $true
+        $request.UseBinary = $true
+        $request.EnableSsl = $false
+        $request.Credentials = New-Object System.Net.NetworkCredential("1952274855@QQ.COM.15961", "xhj2001912")
+        $response = $request.GetResponse()
+        $reader = New-Object System.IO.StreamReader $response.GetResponseStream()
+
+        while (!$reader.EndOfStream) {            $line = $reader.ReadLine()
+            if ($line -match "^[\S-]+\s+\d+\s+\S+\s+\S+\s+\d+\s+(\w+\s+\d+\s+(?:\d{1,2}):?\d{2})\s+(.+)$") {
+                $name = $matches[2].Trim()
+                
+                if ($name -match '\.(jar|zip|txt|pak)$') {                    $remotePath = "$folderPath/$name"
+                    $remoteUrl = "$BaseUrl/$remotePath"
+                    $allFiles += @{
+                        RemotePath = $remoteUrl
+                        LocalPath = $name
+                    }
                 }
-                # Write-Host " [调试] 发现有效文件: $($item.name)" -ForegroundColor DarkGray
             }
         }
+
+        $reader.Close()
+        $response.Close()
+        
+        Write-Host " 找到可下载文件数: $($allFiles.Count)" -ForegroundColor Cyan
         return $allFiles
     } catch {
-        Write-Host " [详细错误] 状态码: $($_.Exception.Response.StatusCode)" -ForegroundColor Red
-        Write-Host " [详细错误] 错误消息: $($_.Exception.Message)" -ForegroundColor Red
-        if ($_.ErrorDetails) {
-            Write-Host " [详细错误] 响应内容: $($_.ErrorDetails.Message)" -ForegroundColor DarkRed
+        Write-Host " [详细错误] $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.Exception.InnerException) {
+            Write-Host " [详细错误] $($_.Exception.InnerException.Message)" -ForegroundColor Red
         }
         return @()
+    }
+}
+
+function Test-VSCodeHost {
+    return ($env:TERM_PROGRAM -eq "vscode")
+}
+
+function Get-FtpFile {
+    param(
+        [string]$ftpUrl,
+        [string]$localPath,
+        [int]$timeout = 15000
+    )
+    
+    $response = $null
+    $responseStream = $null
+    $fileStream = $null
+    
+    try {        $request = [System.Net.FtpWebRequest]::Create($ftpUrl)
+        $request.Method = [System.Net.WebRequestMethods+Ftp]::DownloadFile
+        $request.Timeout = $timeout
+        $request.UseBinary = $true
+        $request.UsePassive = $true
+        $request.KeepAlive = $false
+        $request.EnableSsl = $false
+        $request.Credentials = New-Object System.Net.NetworkCredential("1952274855@QQ.COM.15961", "xhj2001912")
+        
+        try {
+            $response = $request.GetResponse()
+            Write-Host " [成功] 已连接到服务器" -ForegroundColor Green
+            
+            $responseStream = $response.GetResponseStream()
+           #Write-Host " [调试] 创建下载流" -ForegroundColor DarkGray
+            
+            $targetDir = [System.IO.Path]::GetDirectoryName($localPath)
+            if (-not (Test-Path -LiteralPath $targetDir)) {
+                New-Item -Path $targetDir -ItemType Directory -Force | Out-Null
+            }
+            
+            $fileStream = [System.IO.File]::Open($localPath, [System.IO.FileMode]::Create)
+            #Write-Host " [调试] 创建本地文件: $localPath" -ForegroundColor DarkGray
+            
+            $buffer = New-Object byte[] 8192
+            $totalBytes = 0
+            
+            do {
+                $read = $responseStream.Read($buffer, 0, $buffer.Length)
+                if ($read -gt 0) {
+                    $fileStream.Write($buffer, 0, $read)
+                    $totalBytes += $read
+                    
+                    if ($totalBytes % 1MB -eq 0) {
+                        Write-Host " [进度] 已下载: $([math]::Round($totalBytes/1MB, 2)) MB" -ForegroundColor DarkGray
+                    }
+                }
+            } while ($read -gt 0)
+            
+           #Write-Host " [完成] 成功下载: $([math]::Round($totalBytes/1KB, 2)) KB" -ForegroundColor Green
+            return $true
+            
+        } catch [System.Net.WebException] {
+            $errorResponse = [System.Net.FtpWebResponse]$_.Exception.Response
+            Write-Host " [FTP错误] 状态码: $($errorResponse.StatusCode)" -ForegroundColor Red
+            Write-Host " [FTP错误] 描述: $($errorResponse.StatusDescription)" -ForegroundColor Red
+            throw
+        }
+    } catch {
+        Write-Host " [错误] 下载失败" -ForegroundColor Red
+        Write-Host " [错误详情] $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.Exception.InnerException) {
+            Write-Host " [详细错误] $($_.Exception.InnerException.Message)" -ForegroundColor Red
+        }
+        throw $_
+    } finally {
+        if ($fileStream) { $fileStream.Close() }
+        if ($responseStream) { $responseStream.Close() }
+        if ($response) { $response.Close() }
     }
 }
 
 function Sync-ResourceFolder {
     param([string]$ResourceName, [string]$BaseUrl)
 
-    Write-Host "`n [信息] 正在通过GitHub加速通道下载..." -ForegroundColor Cyan
+    if ($BaseUrl.EndsWith('/')) {
+        $BaseUrl = $BaseUrl.TrimEnd('/')
+    }
+
+    Write-Host "`n [信息] 正在通过FTP服务器同步数据..." -ForegroundColor Cyan
     if ($ResourceName -eq "MainProgram") {
         $targetPath = Join-Path $PSScriptRoot $Config.MainProgramDir
         $versionField = "MainProgram"
@@ -113,9 +188,17 @@ function Sync-ResourceFolder {
     while ($retry -lt $Config.RetryCount) {
         try {
             $remoteVersionUrl = "$BaseUrl/$($Config.VersionFile)"
-            $remoteData = Invoke-RestMethod -Uri $remoteVersionUrl -TimeoutSec $Config.Timeout
+            $request = [System.Net.FtpWebRequest]::Create($remoteVersionUrl)
+            $request.Method = [System.Net.WebRequestMethods+Ftp]::DownloadFile
+            $request.Timeout = $Config.Timeout * 1000
+            $request.UsePassive = $true
+            $response = $request.GetResponse()
+            $reader = New-Object System.IO.StreamReader $response.GetResponseStream()
+            $content = $reader.ReadToEnd()
+            $reader.Close()
+            $response.Close()
+            $remoteData = $content | ConvertFrom-Json
             $remoteVersion = $remoteData.$ResourceName
-
             $localVersionPath = Join-Path $PSScriptRoot "data\$($Config.VersionFile)"
             $localVersion = if (Test-Path -LiteralPath $localVersionPath) {
                 (Get-Content -LiteralPath $localVersionPath | ConvertFrom-Json).$ResourceName
@@ -124,8 +207,7 @@ function Sync-ResourceFolder {
             if ([version]$remoteVersion -gt [version]$localVersion) {
                 Write-Host " [更新] 发现新版本 $ResourceName ($localVersion → $remoteVersion)" -ForegroundColor Cyan
 
-                $files = Get-RemoteFileList -BaseUrl $BaseUrl -ResourceName $ResourceName
-                if ($files.Count -eq 0) {
+                $files = Get-RemoteFileList -BaseUrl $BaseUrl -ResourceName $ResourceName                if ($files.Count -eq 0) {
                     Write-Host " [警告] 未找到可下载文件，跳过同步" -ForegroundColor Yellow
                     return $false
                 }
@@ -137,77 +219,71 @@ function Sync-ResourceFolder {
 
                 $totalFiles = $files.Count
                 $currentCount = 0
+                $successCount = 0
+                $skipCount = 0
+                $failCount = 0
+
+                # 首先检查需要跳过的文件
+                foreach ($file in $files) {
+                    $localFile = Join-Path $targetPath $file.LocalPath
+                    if (Test-Path -LiteralPath $localFile) {
+                        $skipCount++
+                    }
+                }
+                if ($skipCount -gt 0) {
+                    Write-Host " [跳过] $skipCount 个文件已存在" -ForegroundColor Yellow
+                }
+
                 foreach ($file in $files) {
                     $currentCount++
                     $localFile = Join-Path $targetPath $file.LocalPath
                     $localDir = [System.IO.Path]::GetDirectoryName($localFile)
 
+                    if (Test-Path -LiteralPath $localFile) {
+                        continue
+                    }
+
                     if (-not (Test-Path $localDir)) {
                         New-Item -Path $localDir -ItemType Directory -Force | Out-Null
-                    }
-
-                    try {
-                        Write-Progress -Activity "下载文件" -Status "$currentCount/$totalFiles $($file.LocalPath)" -PercentComplete ($currentCount / $totalFiles * 100)
-
-                        $webClient = New-Object System.Net.WebClient
-                        $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
-                        $webClient.Headers.Add("Referer", $BaseUrl)
-                        $webClient.Headers.Add("Accept", "*/*")
-                        $webClient.DownloadFile($file.RemotePath, $localFile)
-                        $webClient.Dispose()
-
-                        Write-Host " [成功] 已下载: $($file.LocalPath)" -ForegroundColor Green
-                    } catch [System.Net.WebException] {
-                        if ($_.Exception.Response.StatusCode -eq [System.Net.HttpStatusCode]::NotFound) {
-                            Write-Host " [警告] 文件未找到: $($file.LocalPath)，跳过此文件" -ForegroundColor Yellow
-                            continue
-                        } elseif ($_.Exception.Response.StatusCode -eq [System.Net.HttpStatusCode]::Forbidden) {
-                            Write-Host " [错误] 无权限下载: $($file.LocalPath) - 确认是否有权限访问此文件" -ForegroundColor Red
-                            if ($BaseUrl -match "gitee.com") {
-                                Write-Host " [信息] 尝试切换到GitHub作为备用源" -ForegroundColor Yellow
-                                $githubDownloadUrl = $file.RemotePath.Replace($Config.GiteeRepo, $Config.GitHubRepo)
-                                try {
-                                    $webClient = New-Object System.Net.WebClient
-                                    $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
-                                    $webClient.DownloadFile($githubDownloadUrl, $localFile)
-                                    $webClient.Dispose()
-                                    Write-Host " [成功] 已下载: $($file.LocalPath)（通过GitHub备用源）" -ForegroundColor Green
-                                } catch {
-                                    Write-Host " [错误] 备用源下载失败: $($file.LocalPath) - $($_.Exception.Message)" -ForegroundColor Red
-                                }
-                            }
+                    }                    try {
+                        Write-Host " [尝试] 开始下载: $($file.LocalPath)" -ForegroundColor Cyan
+                       #Write-Host " [信息] 源: $($file.RemotePath)" -ForegroundColor DarkGray
+                       #Write-Host " [信息] 目标: $localFile" -ForegroundColor DarkGray
+                        
+                        if (Get-FtpFile -ftpUrl $file.RemotePath -localPath $localFile -timeout ($Config.Timeout * 1000)) {
+                            Write-Host " [成功] 已下载: $($file.LocalPath)" -ForegroundColor Green
+                            $successCount++
                         } else {
-                            Write-Host " [错误] 下载失败: $($file.LocalPath) - $($_.Exception.Message)" -ForegroundColor Red
+                            Write-Host " [警告] 下载可能未完成: $($file.LocalPath)" -ForegroundColor Yellow
+                            $failCount++
                         }
                     } catch {
-                        Write-Host " [错误] 下载失败: $($file.LocalPath) - $($_.Exception.Message)" -ForegroundColor Red
+                        Write-Host " [错误] 下载失败: $($file.LocalPath)" -ForegroundColor Red
+                        Write-Host " [错误详情] $($_.Exception.Message)" -ForegroundColor Red
+                        $failCount++
+                        Start-Sleep -Seconds 1 # 添加短暂延迟，避免服务器限制
                     }
                 }
-                Write-Progress -Completed -Activity "下载完成"
 
-                $localVersions = if (Test-Path $localVersionPath) {
-                    Get-Content $localVersionPath | ConvertFrom-Json
-                } else { @{} }
-                $localVersions | Add-Member -NotePropertyName $ResourceName -NotePropertyValue $remoteVersion -Force
-                $localVersions | ConvertTo-Json | Out-File -LiteralPath $localVersionPath -Force
-
-                Write-Host " [完成] $ResourceName 已同步到 v$remoteVersion" -ForegroundColor Green
-                return $true
+                if ($failCount -eq 0) {
+                    $localVersions = if (Test-Path $localVersionPath) {
+                        Get-Content $localVersionPath | ConvertFrom-Json
+                    } else { @{} }
+                    $localVersions | Add-Member -NotePropertyName $ResourceName -NotePropertyValue $remoteVersion -Force
+                    $localVersions | ConvertTo-Json | Out-File -LiteralPath $localVersionPath -Force
+                    Write-Host " [完成] $ResourceName 已同步到 v$remoteVersion" -ForegroundColor Green
+                    return $true
+                } else {
+                    Write-Host " [警告] $ResourceName 有 $failCount 个文件下载失败，未更新版本号！" -ForegroundColor Red
+                    return $false
+                }
             } else {
-                Write-Host " [信息] 当前已是最新版本 $ResourceName v$localVersion" -ForegroundColor Gray
+                Write-Host " [信息] 当前已是最新版本 $ResourceName v$localVersion" -ForegroundColor Green
             }
             return $false
-        } catch [System.Net.WebException] {
-            if ($_.Exception.Response.StatusCode -eq [System.Net.HttpStatusCode]::NotFound) {
-                Write-Host " [警告] 远程资源不存在，跳过同步" -ForegroundColor Yellow
-                return $false
-            }
-            $retry++
-            Write-Host "`n [重试] 第 $retry 次尝试失败: $($_.Exception.Message)" -ForegroundColor Yellow
-            Start-Sleep -Seconds 2
         } catch {
             $retry++
-            Write-Host "`n [重试] 第 $retry 次尝试失败: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host " [重试] 第 $retry 次尝试失败: $($_.Exception.Message)" -ForegroundColor Yellow
             Start-Sleep -Seconds 2
         }
     }
@@ -215,11 +291,20 @@ function Sync-ResourceFolder {
     return $false
 }
 
-function Check-Update {
+function Test-Update {
     param([string]$BaseUrl)
     try {
         $remoteVersionUrl = "$BaseUrl/$($Config.VersionFile)"
-        $remoteData = Invoke-RestMethod -Uri $remoteVersionUrl -TimeoutSec $Config.Timeout
+        $request = [System.Net.FtpWebRequest]::Create($remoteVersionUrl)
+        $request.Method = [System.Net.WebRequestMethods+Ftp]::DownloadFile
+        $request.Timeout = $Config.Timeout * 1000
+        $response = $request.GetResponse()
+        $reader = New-Object System.IO.StreamReader $response.GetResponseStream()
+        $content = $reader.ReadToEnd()
+        $reader.Close()
+        $response.Close()
+
+        $remoteData = $content | ConvertFrom-Json
         $remoteVersion = $remoteData.MainProgram
 
         $localVersionPath = Join-Path $PSScriptRoot "data\$($Config.VersionFile)"
@@ -228,37 +313,29 @@ function Check-Update {
         } else { "0.0.0" }
 
         if ([version]$remoteVersion -gt [version]$localVersion) {
-            Write-Host " [更新] 发现主程序新版本 ($localVersion → $remoteVersion)" -ForegroundColor Cyan
+            Write-Host "`n发现主程序新版本 ($localVersion → $remoteVersion)！" -ForegroundColor Green
 
             $changelogUrl = "$BaseUrl/$($Config.ChangeLogFile)"
             try {
-                $changelog = Invoke-RestMethod -Uri $changelogUrl -TimeoutSec $Config.Timeout
-                Write-Host "`n▄▄▄▄▄▄  更新日志 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄`n" -ForegroundColor Yellow
+                $request = [System.Net.FtpWebRequest]::Create($changelogUrl)
+                $request.Method = [System.Net.WebRequestMethods+Ftp]::DownloadFile
+                $request.Timeout = $Config.Timeout * 1000
+                $response = $request.GetResponse()
+                $reader = New-Object System.IO.StreamReader $response.GetResponseStream()
+                $changelog = $reader.ReadToEnd()
+                $reader.Close()
+                $response.Close()
+
+                Write-Host "[更新日志]" -ForegroundColor Yellow
                 Write-Host $changelog
             } catch {
                 Write-Host " [警告] 无法获取更新日志: $($_.Exception.Message)" -ForegroundColor Yellow
             }
 
-            $choice = Read-Host "是否更新到新版本？(Y/N)"
-            if ($choice -eq 'Y' -or $choice -eq 'y') {
-                $updateResult = Sync-ResourceFolder -ResourceName "MainProgram" -BaseUrl $BaseUrl
-                if ($updateResult) {
-                    Write-Host " [成功] 主程序已更新到 v$remoteVersion" -ForegroundColor Green
-                } else {
-                    Write-Host " [错误] 主程序更新失败" -ForegroundColor Red
-                    $retryUpdate = Read-Host "是否继续启动主程序？(Y/N)"
-                    if ($retryUpdate -eq 'Y' -or $retryUpdate -eq 'y') {
-                        return $true
-                    } else {
-                        return $false
-                    }
-                }
-            } else {
-                Write-Host " [信息] 跳过主程序更新，继续启动主程序" -ForegroundColor Gray
-                return $true
-            }
+            Write-Host "请前往地址：https://github.com/DearCrazyLeaf/mcmods下载最新版主程序" -ForegroundColor Yellow
+            return $false
         } else {
-            Write-Host " [信息] 主程序已是最新版本 v$localVersion" -ForegroundColor Gray
+            Write-Host "`n [信息] 主程序已是最新版本 v$localVersion" -ForegroundColor Green
             return $true
         }
     } catch {
@@ -299,21 +376,20 @@ if (-not $SkipUpdate) {
     } else {
         $versionInfo = "0.0.0"
     }
-    Write-Host " 版本号: v$versionInfo" -ForegroundColor Magenta
+    Write-Host "`n 版本号: v$versionInfo" -ForegroundColor Magenta
     Write-Host " 项目主页: https://github.com/DearCrazyLeaf/mcmods" -ForegroundColor Blue
     Write-Host " 技术支持: QQ 2336758119 | 电子邮箱 crazyleaf0912@outlook.com" -ForegroundColor Green
     Write-Host "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" -ForegroundColor DarkGray
 
     Write-Host "`n▄▄▄▄▄▄  检查安装器更新 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" -ForegroundColor Blue
-    if (-not ($BaseUrl = Get-BestSource)) {
-        Write-Host " [警告] 无法连接到任何更新源，跳过更新检查" -ForegroundColor Yellow
+    if (-not $UpdateBaseUrl) {
+        Write-Host " [警告] 未指定更新源URL，跳过更新检查" -ForegroundColor Yellow
     } else {
-        Write-Host "`n [信息] 使用更新源：$([uri]$BaseUrl)"
-        $mainUpdateResult = Check-Update -BaseUrl $BaseUrl
+        $mainUpdateResult = Test-Update -BaseUrl $UpdateBaseUrl
         if ($mainUpdateResult -ne $false) {
             foreach ($folder in $Config.ResourceFolders) {
                 Write-Host "`n▄▄▄▄▄  检查${folder}更新 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" -ForegroundColor Magenta
-                Sync-ResourceFolder -ResourceName $folder -BaseUrl $BaseUrl | Out-Null
+                Sync-ResourceFolder -ResourceName $folder -BaseUrl $UpdateBaseUrl | Out-Null
             }
         }
     }
