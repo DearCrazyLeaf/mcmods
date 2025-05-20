@@ -1,7 +1,7 @@
 ﻿param(
     [string]$targetRoot = $null,
     [switch]$SkipUpdate = $false,
-    [string]$UpdateBaseUrl = "ftp://1952274855%40QQ.COM.15961:xhj2001912@mcp19.rhymc.com/Updatebase/"
+    [string]$UpdateBaseUrl = ""
 )
 
 $Config = @{
