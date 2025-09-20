@@ -59,7 +59,7 @@ function Get-RemoteFileList {
         $request.UsePassive = $true
         $request.UseBinary = $true
         $request.EnableSsl = $false
-        $request.Credentials = New-Object System.Net.NetworkCredential("1952274855@QQ.COM.15961", "xhj2001912")
+        $request.Credentials = New-Object System.Net.NetworkCredential("", "")
         $response = $request.GetResponse()
         $reader = New-Object System.IO.StreamReader $response.GetResponseStream()
 
